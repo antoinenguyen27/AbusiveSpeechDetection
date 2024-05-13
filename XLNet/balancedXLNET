@@ -1,0 +1,112 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from transformers import XLNetTokenizer, XLNetForSequenceClassification, Trainer, TrainingArguments
+import torch
+from torch.utils.data import Dataset
+
+# Load the dataset
+file_path = 'ConvAbuseEMNLPfull.csv'
+data = pd.read_csv(file_path)
+
+# Combine text features
+data['conversation'] = data[['prev_agent', 'prev_user', 'agent', 'user']].agg(' '.join, axis=1)
+
+# Create a binary target where any abuse level (-1, -2, -3) is considered abuse (1)
+def classify_abuse(row):
+    if row['is_abuse.-1'] == 1 or row['is_abuse.-2'] == 1 or row['is_abuse.-3'] == 1:
+        return 1
+    return 0
+
+data['is_abusive'] = data.apply(classify_abuse, axis=1)
+
+# Handle class imbalance using oversampling
+abusive_data = data[data['is_abusive'] == 1]
+non_abusive_data = data[data['is_abusive'] == 0]
+
+# Oversample the abusive data
+oversampled_abusive_data = abusive_data.sample(len(non_abusive_data), replace=True)
+balanced_data = pd.concat([non_abusive_data, oversampled_abusive_data])
+
+# Select the relevant columns for training and evaluation
+processed_data = balanced_data[['conversation', 'is_abusive']]
+
+# Train-test split (80% training, 20% testing)
+train_data, test_data = train_test_split(processed_data, test_size=0.2, random_state=42, stratify=processed_data['is_abusive'])
+
+# Define dataset class for PyTorch
+class ConvAbuseDataset(Dataset):
+    def __init__(self, data, tokenizer, max_length):
+        self.data = data
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        row = self.data.iloc[index]
+        inputs = self.tokenizer.encode_plus(
+            row['conversation'],
+            max_length=self.max_length,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+
+        item = {key: val.squeeze() for key, val in inputs.items()}
+        item['labels'] = torch.tensor(row['is_abusive'], dtype=torch.long)
+
+        return item
+
+# Initialize the tokenizer and model for XLNet
+tokenizer = XLNetTokenizer.from_pretrained('xlnet-base-cased')
+model = XLNetForSequenceClassification.from_pretrained('xlnet-base-cased', num_labels=2)
+
+# Move the model to the GPU
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+# Create datasets
+max_length = 128
+train_dataset = ConvAbuseDataset(train_data, tokenizer, max_length)
+test_dataset = ConvAbuseDataset(test_data, tokenizer, max_length)
+
+# Training arguments
+training_args = TrainingArguments(
+    output_dir='/mnt/data/xlnet_convabuse',
+    num_train_epochs=3,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    evaluation_strategy='epoch',
+    logging_dir='/mnt/data/xlnet_convabuse/logs',
+    logging_steps=10,
+    save_strategy='epoch',
+    load_best_model_at_end=True,
+    learning_rate=3e-5,
+    report_to=[]
+)
+
+# Trainer initialization
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=test_dataset,
+    compute_metrics=lambda p: {
+        'accuracy': (p.predictions.argmax(-1) == p.label_ids).mean().item()
+    }
+)
+
+# Train and evaluate the model
+trainer.train()
+evaluation_results = trainer.evaluate()
+
+# Evaluate on the test set
+test_evaluation_results = trainer.evaluate(test_dataset)
+
+# Evaluate on the training set
+train_evaluation_results = trainer.evaluate(train_dataset)
+
+print("Test Set Evaluation:", test_evaluation_results)
+print("Training Set Evaluation:", train_evaluation_results)
+
