@@ -7,3 +7,8 @@ Current accuracies are:
 - XLNET: 0.94
 - WORD2VEC + RANDOMFORESTCLASSIFIER: 0.91
 - TEXT CNN: 0.91
+
+# DATASET
+https://github.com/amandacurry/convabuse/tree/main
+
+
