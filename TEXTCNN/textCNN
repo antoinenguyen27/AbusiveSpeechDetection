@@ -1,0 +1,67 @@
+# Import the necessary packages
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten, Embedding, Conv1D, MaxPooling1D
+from sklearn.metrics import accuracy_score
+
+# Load the dataset
+dataset_path = 'ConvAbuseEMNLPfull.csv'  # Update the path as necessary
+df = pd.read_csv(dataset_path)
+
+# Combine relevant text fields into a single text feature
+df['combined_text'] = df[['prev_agent', 'prev_user', 'agent', 'user']].fillna('').agg(' '.join, axis=1)
+
+# Create binary labels based on the majority vote of 'is_abuse' columns
+abuse_columns = ['is_abuse.-1', 'is_abuse.-2', 'is_abuse.-3']
+df['abuse_label'] = (df[abuse_columns].max(axis=1)).astype(int)
+
+# Prepare features and labels
+X = df['combined_text'].values
+y = df['abuse_label'].values
+
+# Split the data into training and validation sets
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Initialize the TF-IDF vectorizer
+tfidf_vectorizer = TfidfVectorizer(max_features=20000)
+X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
+X_val_tfidf = tfidf_vectorizer.transform(X_val)
+
+# Reshape labels for compatibility with Keras
+y_train = np.array(y_train)
+y_val = np.array(y_val)
+
+# Build a CNN architecture
+model = Sequential([
+    Embedding(input_dim=X_train_tfidf.shape[1], output_dim=128, input_length=X_train_tfidf.shape[1]),
+    Conv1D(filters=64, kernel_size=5, activation='relu'),
+    MaxPooling1D(pool_size=2),
+    Flatten(),
+    Dense(64, activation='relu'),
+    Dense(1, activation='sigmoid')
+])
+
+# Compile the model
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Train the model
+model.fit(X_train_tfidf, y_train, epochs=5, batch_size=32, validation_data=(X_val_tfidf, y_val))
+
+# Evaluate the model on the validation set
+y_pred = model.predict_step(X_val_tfidf)
+val_accuracy = accuracy_score(y_val, y_pred)
+
+# Print the evaluation results
+print(f'Validation Accuracy: {val_accuracy:.4f}')
+
+train_loss, train_accuracy = model.evaluate(X_train_pad, y_train)
+val_loss, val_accuracy = model.evaluate(X_val_pad, y_val)
+
+# Print the results
+print(f'Training Loss: {train_loss:.4f}')
+print(f'Training Accuracy: {train_accuracy:.4f}')
+print(f'Validation Loss: {val_loss:.4f}')
+print(f'Validation Accuracy: {val_accuracy:.4f}')
