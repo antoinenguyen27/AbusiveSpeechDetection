@@ -1,0 +1,73 @@
+import pandas as pd
+import re
+import numpy as np
+from gensim.models import Word2Vec
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, accuracy_score
+
+# Load the dataset
+file_path = 'ConvAbuseEMNLPfull.csv'
+df = pd.read_csv(file_path)
+
+# Aggregate abuse labels into a single column
+abuse_cols = ['is_abuse.-1', 'is_abuse.-2', 'is_abuse.-3']
+df['is_abusive'] = df[abuse_cols].max(axis=1)
+
+print(df['is_abusive'].value_counts())
+
+
+# Extract relevant text columns for Word2Vec processing
+text_columns = ['user', 'agent', 'prev_user', 'prev_agent']
+texts = df[text_columns].fillna('').agg(' '.join, axis=1)
+
+# Define a simple function to tokenize text
+def basic_tokenize(text):
+    return re.findall(r'\b\w+\b', text.lower())
+
+# Tokenize the concatenated texts using the basic tokenizer
+tokenized_texts = [basic_tokenize(text) for text in texts]
+
+# Train the Word2Vec model with the basic tokenization
+word2vec_model = Word2Vec(sentences=tokenized_texts, vector_size=100, window=5, min_count=2, sg=1)
+
+# Save the model for future use
+word2vec_model_path = 'word2vec_abuse_detection_basic.model'
+word2vec_model.save(word2vec_model_path)
+
+# Create a function to aggregate word vectors for each document
+def document_vector(text, model):
+    vector = np.zeros((model.vector_size,))
+    num_words = 0
+
+    for word in text:
+        if word in model.wv:
+            vector += model.wv[word]
+            num_words += 1
+
+    if num_words > 0:
+        vector /= num_words
+    return vector
+
+# Generate feature vectors for each text entry
+features = np.array([document_vector(tokens, word2vec_model) for tokens in tokenized_texts])
+
+# Get the labels for classification
+labels = df['is_abusive']
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(features, labels, test_size=0.3, random_state=42)
+
+# Train a Random Forest classifier
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+clf.fit(X_train, y_train)
+
+# Predict and evaluate the model
+y_pred = clf.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+report = classification_report(y_test, y_pred)
+
+# Print results
+print(f"Accuracy: {accuracy * 100:.2f}%")
+print("Classification Report:")
+print(report)
